@@ -6,7 +6,7 @@
 # V 1.0.0 02/01/2020 Guillermo Castro Initial Version
 # V 2.0.0 15/06/2020 Guillermo Castro
 # V 2.1.0 15/02/2021 Guillermo Castro
-# V 2.1.1 15/02/2021 Guillermo Castro
+
 $env:DBMSVR="L1-DBADEVDB-01"
 $env:DBMDB="DBMDB"
 $env:localDB="Admin"
@@ -33,6 +33,10 @@ Write-Host "Current DBM version  :" $env:DBMVersion -ForegroundColor DarkCyan
 Write-Host "Current DBM server   :" $env:DBMSVR -ForegroundColor DarkCyan
 Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan 
 
+    function Get-Timestamp
+    {
+        return (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
+    }
     function Get-ConnectionString ([string]$server=$env:DBMSVR,[string]$database,[string]$username,[string]$password)
     {
         if (([string]::IsNullOrEmpty($database)))
@@ -1787,18 +1791,16 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
         {
             # Your code goes here
             $connectionstring=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
-            $clientconnectionstring=Get-ConnectionString -server $InstanceId -database msdb
-            $query="TRUNCATE TABLE [dbm].[tmpDBBackup]"
-            Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
+            $clientconnectionstring=Get-ConnectionString -server $InstanceId -database master
             #$channel=Get-Channel -InstanceId L1-SFGALDUAT-01
-            $q=Get-DataTable -connectionstring $clientconnectionstring -sqlquery "SELECT SUBSTRING(CONVERT(VARCHAR(20),SERVERPROPERTY('ProductVersion')),1,2) AS V"
-            IF ($q.V -eq "11")
-            {
+            $cleaning="DELETE dbm.DBBackup WHERE InstanceId='"+$InstanceId+"'"
+            Invoke-Transaction -connectionstring $connectionstring -sqlquery $cleaning
             $query="SELECT 
 	                    CONVERT(CHAR(100), SERVERPROPERTY('Servername')) AS InstanceId, 
 	                    msdb.dbo.backupset.database_name AS DBName, 
 	                    msdb.dbo.backupset.backup_start_date AS BackupStart, 
 	                    msdb.dbo.backupset.backup_finish_date AS BackupEnd, 
+						CAST(DATEDIFF(second, msdb.dbo.backupset.backup_start_date,msdb.dbo.backupset.backup_finish_date) AS VARCHAR(4)) + ' ' + 'Seconds' TimeTaken,
 	                    msdb.dbo.backupset.expiration_date AS ExpiryDate, 
 	                    CASE msdb..backupset.type 
 	                    WHEN 'D' THEN 'Full' 
@@ -1807,7 +1809,7 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
 	                    END AS BackupType, 
 	                    msdb.dbo.backupmediaset.is_password_protected AS IsPasswordProtected,
 	                    msdb.dbo.backupmediaset.is_compressed AS IsCompressed,
-	                    'FALSE' AS IsEncrypted,
+	                    CASE WHEN msdb.dbo.backupmediaset.is_encrypted IS NULL THEN 'FALSE' ELSE 'TRUE' END AS IsEncrypted,
 	                    CONVERT(DECIMAL(20,2),msdb.dbo.backupset.compressed_backup_size/1024.0) AS CompressedSizeKB,
 	                    CONVERT(DECIMAL(20,2),msdb.dbo.backupset.backup_size/1024.0) AS BackupSizeKB,
 	                    msdb.dbo.backupmediafamily.physical_device_name AS BackupFile, 
@@ -1824,42 +1826,7 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
 	                    FROM msdb.dbo.backupmediafamily 
                     INNER JOIN msdb.dbo.backupset ON msdb.dbo.backupmediafamily.media_set_id = msdb.dbo.backupset.media_set_id
                     INNER JOIN msdb.dbo.backupmediaset ON msdb.dbo.backupmediaset.media_set_id=msdb.dbo.backupset.media_set_id
-                    "
-            }
-            else
-            {
-            $query="SELECT 
-	                    CONVERT(CHAR(100), SERVERPROPERTY('Servername')) AS InstanceId, 
-	                    msdb.dbo.backupset.database_name AS DBName, 
-	                    msdb.dbo.backupset.backup_start_date AS BackupStart, 
-	                    msdb.dbo.backupset.backup_finish_date AS BackupEnd, 
-	                    msdb.dbo.backupset.expiration_date AS ExpiryDate, 
-	                    CASE msdb..backupset.type 
-	                    WHEN 'D' THEN 'Full' 
-	                    WHEN 'I' THEN 'Incremental' 
-	                    WHEN 'L' THEN 'Log' 
-	                    END AS BackupType, 
-	                    msdb.dbo.backupmediaset.is_password_protected AS IsPasswordProtected,
-	                    msdb.dbo.backupmediaset.is_compressed AS IsCompressed,
-	                    ISNULL(msdb.dbo.backupmediaset.is_encrypted,'FALSE') AS IsEncrypted,
-	                    CONVERT(DECIMAL(20,2),msdb.dbo.backupset.compressed_backup_size/1024.0) AS CompressedSizeKB,
-	                    CONVERT(DECIMAL(20,2),msdb.dbo.backupset.backup_size/1024.0) AS BackupSizeKB,
-	                    msdb.dbo.backupmediafamily.physical_device_name AS BackupFile, 
-	                    msdb.dbo.backupset.description AS [Description],
-	                    CASE msdb.dbo.backupmediafamily.device_type
-	                    WHEN 2 THEN 'Disk'
-	                    WHEN 5 THEN 'Tape'
-	                    WHEN 9 THEN 'Azure'
-	                    WHEN 105 THEN 'Backup Device'
-	                    END AS device_type,
-	                    msdb.dbo.backupset.first_lsn,
-	                    msdb.dbo.backupset.last_lsn,
-	                    msdb.dbo.backupset.checkpoint_lsn
-	                    FROM msdb.dbo.backupmediafamily 
-                    INNER JOIN msdb.dbo.backupset ON msdb.dbo.backupmediafamily.media_set_id = msdb.dbo.backupset.media_set_id
-                    INNER JOIN msdb.dbo.backupmediaset ON msdb.dbo.backupmediaset.media_set_id=msdb.dbo.backupset.media_set_id
-                    "
-            }
+					WHERE msdb.dbo.backupset.backup_finish_date>GETUTCDATE()-60"
             $dt=Get-DataTable -connectionstring $clientconnectionstring -sqlquery $query
             foreach ($r in $dt)
             {
@@ -1872,19 +1839,161 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
                 {
                     $ExpiryDate="NULL"
                 }
-                $q="INSERT INTO [dbm].[tmpDBBackup] ([InstanceId],[DBName],[BackupStart],[BackupEnd],[ExpiryDate],[BackupType],[IsPasswordProtected],[IsCompressed],[IsEncrypted],[CompressedSizeKB],[BackupSizeKB],[BackupFile],[Description],[device_type],[first_lsn],[last_lsn],[checkpoint_lsn]) VALUES ('"+$InstanceId+"','"+$r.DBName+"','"+$r.BackupStart+"','"+$r.BackupEnd+"',"+$ExpiryDate+",'"+$r.BackupType+"','"+$r.IsPasswordProtected+"','"+$r.IsCompressed+"','"+$r.IsEncrypted+"','"+$r.CompressedSizeKB+"','"+$r.BackupSizeKB+"','"+$r.BackupFile+"','"+$r.Description+"','"+$r.device_type+"','"+$r.first_lsn+"','"+$r.last_lsn+"','"+$r.checkpoint_lsn+"')"
+                $q="INSERT INTO [dbm].[DBBackup] ([InstanceId],[DBName],[BackupStart],[BackupEnd],[TimeTaken],[ExpiryDate],[BackupType],[IsPasswordProtected],[IsCompressed],[IsEncrypted],[CompressedSizeKB],[BackupSizeKB],[BackupFile],[Description],[device_type],[first_lsn],[last_lsn],[checkpoint_lsn],[DataImportUTC]) VALUES ('"+$InstanceId+"','"+$r.DBName+"','"+$r.BackupStart+"','"+$r.BackupEnd+"','"+$r.TimeTaken+"',"+$ExpiryDate+",'"+$r.BackupType+"','"+$r.IsPasswordProtected+"','"+$r.IsCompressed+"','"+$r.IsEncrypted+"','"+$r.CompressedSizeKB+"','"+$r.BackupSizeKB+"','"+$r.BackupFile+"','"+$r.Description+"','"+$r.device_type+"','"+$r.first_lsn+"','"+$r.last_lsn+"','"+$r.checkpoint_lsn+"','"+$datetime+"')"
                 Invoke-Transaction -connectionstring $connectionstring -sqlquery $q
             }
-            $query="
-                MERGE [dbm].[DBBackup] T
-                USING [dbm].[tmpDBBackup] S
-                ON T.InstanceId=S.InstanceId AND T.[DBName]=S.[DBName] AND T.[BackupStart]=S.[BackupStart] AND T.[InstanceId]=S.[InstanceId]
-                WHEN NOT MATCHED BY SOURCE AND T.InstanceId='"+$InstanceId+"' THEN
+        }
+    }
+    function Update-SQLJob
+        {
+        [CmdletBinding()]
+        param(
+            [string]$datetime=(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
+        )
+        DynamicParam 
+        {
+            # Set the dynamic parameters' name
+            $ParameterName = 'InstanceId'
+            
+            # Create the dictionary 
+            $RuntimeParameterDictionary = New-Object System.Management.Automation.RuntimeDefinedParameterDictionary
+
+            # Create the collection of attributes
+            $AttributeCollection = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
+            
+            # Create and set the parameters' attributes
+            $ParameterAttribute = New-Object System.Management.Automation.ParameterAttribute
+            $ParameterAttribute.Mandatory = $false
+            $ParameterAttribute.Position = 0
+
+            # Add the attributes to the attributes collection
+            $AttributeCollection.Add($ParameterAttribute)
+
+            # Generate and set the ValidateSet 
+            #$arrSet = Invoke-Sqlcmd -ServerInstance $env:DBMSVR -Database $env:DBMDB -Query "SELECT InstanceId FROM [dbm].[Instance]"
+            $arrSet=@()
+            $arrSet=Get-InstancesList -active
+            $ValidateSetAttribute = New-Object System.Management.Automation.ValidateSetAttribute($arrSet)
+
+            # Add the ValidateSet to the attributes collection
+            $AttributeCollection.Add($ValidateSetAttribute)
+
+            # Create and return the dynamic parameter
+            $RuntimeParameter = New-Object System.Management.Automation.RuntimeDefinedParameter($ParameterName, [string], $AttributeCollection)
+            $RuntimeParameterDictionary.Add($ParameterName, $RuntimeParameter)
+            return $RuntimeParameterDictionary
+        }
+    begin 
+        {
+            # Bind the parameter to a friendly variable
+            $InstanceId = $PsBoundParameters[$ParameterName]
+        }
+    process 
+        {
+            # Your code goes here
+            $connectionstring=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
+            $clientconnectionstring=Get-ConnectionString -server $InstanceId -database master
+            $query="TRUNCATE TABLE [dbm].[tmpDBJob]"
+            Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
+            $query="SELECT * FROM msdb.dbo.sysjobs"
+            $dt=Get-DataTable -connectionstring $clientconnectionstring -sqlquery $query
+            foreach ($r in $dt){
+                $query="INSERT INTO [dbm].[tmpDBJob] ([InstanceId],[job_id],[originating_server_id],[name],[enabled],[description],[start_step_id],[category_id],[owner_sid],[notify_level_eventlog],[notify_level_email],[notify_level_netsend],[notify_level_page],[notify_email_operator_id],[notify_netsend_operator_id],[notify_page_operator_id],[delete_level],[date_created],[date_modified],[version_number]) VALUES ('"+$InstanceId+"','"+$r.job_id+"',"+$r.originating_server_id+",'"+$r.name+"','"+$r.enabled+"','"+($r.description).Replace("N'","'").Replace("'","''")+"',"+$r.start_step_id+","+$r.category_id+",CONVERT(VARBINARY(85),'"+$r.owner_sid+"'),"+$r.notify_level_eventlog+","+$r.notify_level_email+","+$r.notify_level_netsend+","+$r.notify_level_page+","+$r.notify_email_operator_id+","+$r.notify_page_operator_id+","+$r.notify_page_operator_id+","+$r.delete_level+",CONVERT(DATETIME,'"+$r.date_created.ToString("yyyy-MM-dd hh:mm:ss")+"'),CONVERT(DATETIME,'"+$r.date_modified.ToString("yyyy-MM-dd hh:mm:ss")+"'),"+$r.version_number+")"
+                Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
+            }
+            
+            $query="MERGE [dbm].[DBJob] T
+            USING [dbm].[tmpDBJob] S
+            ON T.InstanceId=S.InstanceId AND T.job_id=S.job_id
+            WHEN MATCHED AND T.InstanceId=S.InstanceId THEN
+                    UPDATE SET
+                            T.[originating_server_id]=S.[originating_server_id],T.[name]=S.[name],T.[enabled]=S.[enabled],T.[description]=S.[description],T.[start_step_id]=S.[start_step_id],T.[category_id]=S.[category_id],T.[owner_sid]=S.[owner_sid],T.[notify_level_eventlog]=S.[notify_level_eventlog],T.[notify_level_netsend]=S.[notify_level_netsend],T.[notify_level_email]=S.[notify_level_email]
+                            ,T.[notify_level_page]=S.[notify_level_page],T.[notify_email_operator_id]=S.[notify_email_operator_id],T.[notify_netsend_operator_id]=S.[notify_netsend_operator_id],T.[notify_page_operator_id]=S.[notify_page_operator_id],T.[delete_level]=S.[delete_level],T.[date_created]=S.[date_created],T.[date_modified]=S.[date_modified],T.[version_number]=S.[version_number],T.[DataImportUTC]='"+$datetime+"'
+            WHEN NOT MATCHED BY SOURCE AND T.InstanceId='"+$InstanceId+"' THEN
+                            DELETE
+            WHEN NOT MATCHED BY TARGET THEN
+                            INSERT ([InstanceId],[job_id],[originating_server_id],[name],[enabled],[description],[start_step_id],[category_id],[owner_sid],[notify_level_eventlog],[notify_level_netsend],[notify_level_email]
+                            ,[notify_level_page],[notify_email_operator_id],[notify_netsend_operator_id],[notify_page_operator_id],[delete_level],[date_created],[date_modified],[version_number],[DataImportUTC])
+                            VALUES (S.[InstanceId],S.[job_id],S.[originating_server_id],S.[name],S.[enabled],S.[description],S.[start_step_id],S.[category_id],S.[owner_sid],S.[notify_level_eventlog],S.[notify_level_netsend],S.[notify_level_email]
+                            ,S.[notify_level_page],S.[notify_email_operator_id],S.[notify_netsend_operator_id],S.[notify_page_operator_id],S.[delete_level],S.[date_created],S.[date_modified],S.[version_number],'"+$datetime+"')
+            ;" 
+            Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
+
+        }
+    }
+    function Update-SQLJobHistory
+    {
+        [CmdletBinding()]
+        param(
+            [string]$datetime=(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
+        )
+        DynamicParam 
+        {
+            # Set the dynamic parameters' name
+            $ParameterName = 'InstanceId'
+            
+            # Create the dictionary 
+            $RuntimeParameterDictionary = New-Object System.Management.Automation.RuntimeDefinedParameterDictionary
+
+            # Create the collection of attributes
+            $AttributeCollection = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
+            
+            # Create and set the parameters' attributes
+            $ParameterAttribute = New-Object System.Management.Automation.ParameterAttribute
+            $ParameterAttribute.Mandatory = $false
+            $ParameterAttribute.Position = 0
+
+            # Add the attributes to the attributes collection
+            $AttributeCollection.Add($ParameterAttribute)
+
+            # Generate and set the ValidateSet 
+            #$arrSet = Invoke-Sqlcmd -ServerInstance $env:DBMSVR -Database $env:DBMDB -Query "SELECT InstanceId FROM [dbm].[Instance]"
+            $arrSet=@()
+            foreach($row in (Invoke-Sqlcmd -ServerInstance $env:DBMSVR -Database $env:DBMDB -Query "SELECT InstanceId FROM [dbm].[Instance]")) {$arrSet=$arrSet+$row.InstanceId}
+            $ValidateSetAttribute = New-Object System.Management.Automation.ValidateSetAttribute($arrSet)
+
+            # Add the ValidateSet to the attributes collection
+            $AttributeCollection.Add($ValidateSetAttribute)
+
+            # Create and return the dynamic parameter
+            $RuntimeParameter = New-Object System.Management.Automation.RuntimeDefinedParameter($ParameterName, [string], $AttributeCollection)
+            $RuntimeParameterDictionary.Add($ParameterName, $RuntimeParameter)
+            return $RuntimeParameterDictionary
+        }
+    begin 
+        {
+            # Bind the parameter to a friendly variable
+            $InstanceId = $PsBoundParameters[$ParameterName]
+        }
+    process 
+        {
+            # Your code goes here
+            $connectionstring=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
+            $clientconnectionstring=Get-ConnectionString -server $InstanceId -database master
+            $query="TRUNCATE TABLE [dbm].[tmpDBJobHistory]"
+            Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
+            $q="SELECT [instance_id],[server] AS [InstanceId],[job_id],[step_id],[step_name],[sql_message_id],[sql_severity],[message],[run_status],[run_date],[run_time],[run_duration],[operator_id_emailed],[operator_id_netsent],[operator_id_paged],[retries_attempted] FROM [msdb].[dbo].[sysJobHistory]"
+            $dt=Get-DataTable -connectionstring $clientconnectionstring -sqlquery $q
+            #$dt | Out-GridView
+            foreach ($r in $dt){
+                $query="INSERT INTO [dbm].[tmpDBJobHistory] ([instance_id],[job_id],[step_id],[step_name],[sql_message_id],[sql_severity],[message],[run_status],[run_date],[run_time],[run_duration],[operator_id_emailed],[operator_id_netsent],[operator_id_paged],[retries_attempted],[server]) VALUES ("+$r.instance_id+",'"+$r.job_id+"',"+$r.step_id+",'"+($r.step_name).Replace("'","''")+"',"+$r.sql_message_id+","+$r.sql_severity+",'"+$r.message.ToString().Replace("'","''")+"',"+$r.run_status+","+$r.run_date+","+$r.run_time+","+$r.run_duration+","+$r.operator_id_emailed+","+$r.operator_id_netsent+","+$r.operator_id_paged+","+$r.retries_attempted+",'"+$InstanceId+"')"
+                #Write-host $query -ForegroundColor Green
+                Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
+            }
+            #Write-Host "[gc3].[tmpsysjobhistory]" -ForegroundColor Cyan
+            $query="MERGE [dbm].[DBJobHistory] T
+                USING [dbm].[tmpDBJobHistory] S
+                ON T.[instance_id]=S.[instance_id] AND T.InstanceId=S.[server] AND T.job_id=S.job_id AND T.step_id=S.step_id AND T.step_name=S.step_name AND T.[run_date]=S.[run_date] AND T.[run_time]=S.[run_time]
+                WHEN MATCHED AND T.InstanceId=S.[server] THEN
+                        UPDATE SET
+                                T.[sql_message_id]=S.[sql_message_id],T.[sql_severity]=S.[sql_severity],T.[message]=S.[message],T.[run_status]=S.[run_status],T.[run_duration]=S.[run_duration],T.[operator_id_emailed]=S.[operator_id_emailed],T.[operator_id_netsent]=S.[operator_id_netsent],T.[operator_id_paged]=S.[operator_id_paged],T.[retries_attempted]=S.[retries_attempted],T.[DataimportUTC]='"+$datetime+"'
+                WHEN NOT MATCHED BY SOURCE AND T.InstanceId='"+$InstanceId+"' 
+                        THEN
                                 DELETE
                 WHEN NOT MATCHED BY TARGET THEN
-                                INSERT ([InstanceId],[DBName],[BackupStart],[BackupEnd],[ExpiryDate],[BackupType],[IsPasswordProtected],[IsCompressed],[IsEncrypted],[CompressedSizeKB],[BackupSizeKB],[BackupFile],[Description],[device_type],[first_lsn],[last_lsn],[checkpoint_lsn],[DataImportUTC])
-                                VALUES (S.[InstanceId],S.[DBName],S.[BackupStart],S.[BackupEnd],S.[ExpiryDate],S.[BackupType],S.[IsPasswordProtected],S.[IsCompressed],S.[IsEncrypted],S.[CompressedSizeKB],S.[BackupSizeKB],S.[BackupFile],S.[Description],S.[device_type],S.[first_lsn],S.[last_lsn],S.[checkpoint_lsn],'"+$datetime+"')
-                ;"
+                                INSERT ([instance_id],[job_id],[step_id],[step_name],[sql_message_id],[sql_severity],[message],[run_status],[run_date],[run_time],[run_duration],[operator_id_emailed],[operator_id_netsent],[operator_id_paged],[retries_attempted],[InstanceId],[DataImportUTC])
+                                VALUES (S.[instance_id], S.[job_id],S.[step_id],S.[step_name],S.[sql_message_id],S.[sql_severity],S.[message],S.[run_status],S.[run_date],S.[run_time],S.[run_duration],S.[operator_id_emailed],S.[operator_id_netsent],S.[operator_id_paged],S.[retries_attempted],S.[server],'"+$datetime+"')
+                ;" 
             Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
         }
     }
@@ -1895,8 +2004,6 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
     #function Update-Disk{}
     #function Update-SQLBackup{}
     #function Update-SQLRestore{}
-    #function Update-SQLJob{}
-    #function Update-SQLJobHistory{}
     #function Update-SQLSchedule{}
     #function Update-SQLStep{}
     #function Update-SQLOperator{}
@@ -1957,38 +2064,8 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
         }
     }
 
-    #Write-Host $env:DBMRowCount -ForegroundColor Cyan
-
-    #$query="DROP TABLE dbm.test"
-    #Invoke-Transaction -connectionstring $cs -sqlquery $query
-    
-    $datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
-    Get-UnusedIndex -datetime $datetime -InstanceId
-    Get-DuplicatedIndex -datetime $datetime -InstanceId L1-DBADEVDB-01 -database crmprod
-
-    Invoke-DBMDaily -datetime $datetime -verbose
-    Invoke-DBMWeekly -datetime $datetime -verbose
-    #Update-DB -InstanceId L1-DBADEVDB-01 -datetime $datetime
-#    Get-SQLDisk -datetime $datetime -DeviceId VAM13492
-
-    
-#Update-Instance -InstanceId VAM13492
-#Invoke-DBMDaily -verbose
-
-#Add-Instance -InstanceId L1-DBADEVDB-01 -Hostname L1-DBADEVDB-01 -DeviceId L1-DBADEVDB-01 -Comments "DBA Dev Server" -Owner "Guillermo Castro" -Environment Dev
-#Add-Instance -InstanceId SK-SQLGENDB-01 -Hostname SK-SQLGENDB-01 -DeviceId SK-SQLGENDB-01 -Comments "Generic Live Server" -Owner "Bruce Heck" -Environment Live
-#Add-Instance -InstanceId SK-CRMSDB-02 -Hostname SK-CRMSDB-02 -Comments "GRP Live Server" -Owner "Graham Lee" -Environment Live
-#Add-Instance -InstanceId SK-CRMSDBDEVDB-02 -Hostname SK-CRMSDBDEVDB-02 -Comments "GRP Dev Server" -Owner "Graham Lee" -Environment Dev
 $datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
-Update-Instance -datetime $datetime -InstanceId  SK-SQLGENDB-01
-Update-DB -datetime $datetime -InstanceId  SK-SQLGENDB-01
-Update-DBFile -datetime $datetime -InstanceId  SK-SQLGENDB-01
-Update-DBTable -datetime $datetime -InstanceId SK-SQLGENDB-01
-
-$datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
-Get-MissingIndex -datetime $datetime -InstanceId SK-SQLGENDB-01 -database DailyReports
-Get-UnusedIndex -datetime $datetime -InstanceId SK-SQLGENDB-01 -database DailyReports
-Get-IndexFragmentation -datetime $datetime -InstanceId SK-SQLGENDB-01 -database DailyReports
-Get-UnusedIndex -datetime $datetime -InstanceId SK-SQLGENDB-01 -database DailyReports
-$datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
-Get-Configuration -datetime $datetime -InstanceId SK-SQLGENDB-01
+Update-SQLJob -datetime $datetime -InstanceId SK-SQLGENDB-01
+Update-SQLJobHistory -datetime $datetime -InstanceId SK-SQLGENDB-01
+#Update-DBRestore -datetime $datetime -InstanceId SK-CRMSDB-02
+#Update-DBBackup -datetime $datetime -InstanceId SK-CRMSDB-02

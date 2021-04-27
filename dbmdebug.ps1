@@ -6,6 +6,7 @@
 # V 1.0.0 02/01/2020 Guillermo Castro Initial Version
 # V 2.0.0 15/06/2020 Guillermo Castro
 # V 2.1.0 15/02/2021 Guillermo Castro
+# V 2.1.1 27/04/2021 Guillermo Castro
 
 $env:DBMSVR="L1-DBADEVDB-01"
 $env:DBMDB="DBMDB"
@@ -104,8 +105,9 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
         {
             $ErrorMessage = $_.Exception.Message
             $FailedItem = $_.Exception.ItemName
-            Write-Host $ErrorMessage -ForegroundColor DarkYellow
-            Write-Host $FailedItem -ForegroundColor DarkYellow
+            Write-Host $ErrorMessage -ForegroundColor Yellow
+            Write-Host "Called from"$((Get-PSCallStack)[1].Command) -ForegroundColor DarkYellow
+            Write-Host $sqlquery -ForegroundColor White
         }
         $SqlConn.Close()
         return $result
@@ -1040,11 +1042,29 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
         {
             # Your code goes here
             $connectionstring=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
-            $dt=Get-WmiObject win32_logicaldisk -ComputerName $DeviceId
-            $dt
-            foreach ($r in $dt){
-                $query="INSERT INTO [dbm].[Disk] ([DeviceId],[Drive],[DriveType],[FreeSpace],[Size],[VolumeName],[DataImportUTC]) VALUES ('"+$DeviceId+"','"+$r.DeviceID+"','"+$r.DriveType+"','"+$r.FreeSpace+"','"+$r.Size+"','"+$r.VolumeName+"','"+$datetime+"')"
-                Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
+            Write-Host "Getting Disk space on"$DeviceId -ForegroundColor White -NoNewline
+            try
+            {
+                $dt=Get-WmiObject win32_logicaldisk -ComputerName $DeviceId | Out-Null
+                foreach ($r in $dt)
+                {
+                    if ($r.VolumeName)
+                    {
+                        $volname=$r.VolumeName
+                        $volname=$volname.Replace("'","''")
+                    }
+                    else
+                    {
+                        $volname=""
+                    }
+                    $query="INSERT INTO [dbm].[Disk] ([DeviceId],[Drive],[DriveType],[FreeSpace],[Size],[VolumeName],[DataImportUTC]) VALUES ('"+$DeviceId+"','"+$r.DeviceID+"','"+$r.DriveType+"','"+$r.FreeSpace+"','"+$r.Size+"','"+$volname+"','"+$datetime+"')"
+                    Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
+                }
+                Write-Host " Ok" -ForegroundColor Cyan
+            }
+            catch
+            {
+                Write-Host " Failed" -ForegroundColor Red
             }
         }
     }
@@ -1131,7 +1151,7 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
                 Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
         }
     }
-    function Update-DBFile
+    function Update-DBFile #ojo
     {
         [CmdletBinding()]
         param(
@@ -1180,8 +1200,8 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
     process 
         {
             # Your code goes here
-            Write-Host $Instance -Foreground Cyan
-            $clientconnectionstring=Get-ConnectionString -server $Instance -database master
+            #Write-Host $InstanceId -Foreground Cyan
+            $clientconnectionstring=Get-ConnectionString -server $InstanceId -database master
             $connectionstring=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
             $query="TRUNCATE TABLE [dbm].[tmpDBFile]"
             Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
@@ -1208,18 +1228,19 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
                     $name=($row.Name)
                     try
                     {
-                        $dt=Get-DataTable -connectionstring (Get-ConnectionString -server $InstanceId -Database ($row.Name)) -Query $q
+                        $clientconnectionstring=Get-ConnectionString -server $InstanceId -database master
+                        $dt=Get-DataTable -connectionstring $clientconnectionstring -sqlquery $q
                         #Write-Host $q -ForegroundColor DarkCyan
                         #$dt | Out-GridView
-                        foreach ($r in $dt){
+                        foreach ($r in $dt)
+                        {
                             $query="INSERT INTO [dbm].[tmpDBFile] ([InstanceId],[DBName],[FileName],[FileType],[PhysicalDisk],[MaxSizeMB],[Growth],[FileSizeMB],[FreeSpaceMB],[FreeSpace%]) VALUES ('"+$r.InstanceId+"','"+$r.DBName+"','"+$r.DBFile+"','"+$r.FileType+"','"+$r.PhysicalDisk+"','"+$r.MaxSizeMB+"','"+$r.Growth+"','"+$r.FileSizeMB+"','"+$r.'FreeSpaceMB'+"','"+$r.'FreeSpace%'+"')"
-                            #Write-host $query -ForegroundColor Green
                             Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
                         }
                     }
                     catch
                     {
-                      Write-Host $name" has an old structure" -ForegroundColor Yellow
+                      Write-Host $name" has a different structure" -ForegroundColor Yellow
                       $query="INSERT INTO [dbm].[tmpDBFile] ([InstanceId],[DBName],[FileName],[FileType],[PhysicalDisk],[MaxSizeMB],[Growth],[FileSizeMB],[FreeSpaceMB],[FreeSpace%]) VALUES ('"+$InstanceId+"','"+$name+"','N/A','N/A','','0','0','0','0','0')"
                       Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
                     }
@@ -1747,7 +1768,8 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
     {
         [CmdletBinding()]
         param(
-            [string]$datetime=(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
+            [string]$datetime=(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+            [string]$version=""
         )
         DynamicParam 
         {
@@ -1795,6 +1817,43 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
             #$channel=Get-Channel -InstanceId L1-SFGALDUAT-01
             $cleaning="DELETE dbm.DBBackup WHERE InstanceId='"+$InstanceId+"'"
             Invoke-Transaction -connectionstring $connectionstring -sqlquery $cleaning
+            if ($version -eq "2012")
+            {
+            $query="SELECT 
+	                    CONVERT(CHAR(100), SERVERPROPERTY('Servername')) AS InstanceId, 
+	                    msdb.dbo.backupset.database_name AS DBName, 
+	                    msdb.dbo.backupset.backup_start_date AS BackupStart, 
+	                    msdb.dbo.backupset.backup_finish_date AS BackupEnd, 
+						CAST(DATEDIFF(second, msdb.dbo.backupset.backup_start_date,msdb.dbo.backupset.backup_finish_date) AS VARCHAR(4)) + ' ' + 'Seconds' TimeTaken,
+	                    msdb.dbo.backupset.expiration_date AS ExpiryDate, 
+	                    CASE msdb..backupset.type 
+	                    WHEN 'D' THEN 'Full' 
+	                    WHEN 'I' THEN 'Incremental' 
+	                    WHEN 'L' THEN 'Log' 
+	                    END AS BackupType, 
+	                    msdb.dbo.backupmediaset.is_password_protected AS IsPasswordProtected,
+	                    msdb.dbo.backupmediaset.is_compressed AS IsCompressed,
+	                    'FALSE' AS IsEncrypted,
+	                    CONVERT(DECIMAL(20,2),msdb.dbo.backupset.compressed_backup_size/1024.0) AS CompressedSizeKB,
+	                    CONVERT(DECIMAL(20,2),msdb.dbo.backupset.backup_size/1024.0) AS BackupSizeKB,
+	                    msdb.dbo.backupmediafamily.physical_device_name AS BackupFile, 
+	                    msdb.dbo.backupset.description AS [Description],
+	                    CASE msdb.dbo.backupmediafamily.device_type
+	                    WHEN 2 THEN 'Disk'
+	                    WHEN 5 THEN 'Tape'
+	                    WHEN 9 THEN 'Azure'
+	                    WHEN 105 THEN 'Backup Device'
+	                    END AS device_type,
+	                    msdb.dbo.backupset.first_lsn,
+	                    msdb.dbo.backupset.last_lsn,
+	                    msdb.dbo.backupset.checkpoint_lsn
+	                    FROM msdb.dbo.backupmediafamily 
+                    INNER JOIN msdb.dbo.backupset ON msdb.dbo.backupmediafamily.media_set_id = msdb.dbo.backupset.media_set_id
+                    INNER JOIN msdb.dbo.backupmediaset ON msdb.dbo.backupmediaset.media_set_id=msdb.dbo.backupset.media_set_id
+					WHERE msdb.dbo.backupset.backup_finish_date>GETUTCDATE()-60"
+            }
+            else
+            {
             $query="SELECT 
 	                    CONVERT(CHAR(100), SERVERPROPERTY('Servername')) AS InstanceId, 
 	                    msdb.dbo.backupset.database_name AS DBName, 
@@ -1827,6 +1886,7 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
                     INNER JOIN msdb.dbo.backupset ON msdb.dbo.backupmediafamily.media_set_id = msdb.dbo.backupset.media_set_id
                     INNER JOIN msdb.dbo.backupmediaset ON msdb.dbo.backupmediaset.media_set_id=msdb.dbo.backupset.media_set_id
 					WHERE msdb.dbo.backupset.backup_finish_date>GETUTCDATE()-60"
+            }
             $dt=Get-DataTable -connectionstring $clientconnectionstring -sqlquery $query
             foreach ($r in $dt)
             {
@@ -2023,19 +2083,34 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
         $datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss"),
             [switch]$verbose=$false
         )
-        $dt=Get-InstancesList
+        $q="SELECT InstanceId,CASE WHEN SUBSTRING(ProductVersion,1,2)='11' THEN '2012' ELSE '' END AS ProductVersion,Edition,ServerState FROM dbm.Instance"
+        $cs=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
+        $dt=Get-DataTable -connectionstring $cs -sqlquery $q
+        if ($verbose) {Write-Host "Timestamp"$datetime -ForegroundColor White}
+        foreach ($row in $dt)
+        {
+            if ($verbose) {Write-Host "Updating"$row.InstanceId -ForegroundColor White -NoNewline}
+            
+            Update-Instance -InstanceId $row.InstanceId -datetime $datetime
+            if ($row.ServerState -eq "Active"){
+                if ($row.Edition -ne "Express Edition (64-bit)")
+                {
+                    Update-DBRestore -InstanceId $row.InstanceId -datetime $datetime
+                    $version=$row.ProductVersion
+                    Update-DBBackup -InstanceId $row.InstanceId -datetime $datetime -version $version
+                }
+            }
+            
+            if ($verbose) {Write-Host " Completed" -ForegroundColor Cyan}
+        }
+        $q="SELECT DeviceId,OS FROM dbm.Device WHERE DeviceId IN (SELECT DeviceId FROM dbm.Instance)"
+        $dt=Get-DataTable -connectionstring $cs -sqlquery $q
         if ($verbose) {Write-Host "Timestamp"$datetime -ForegroundColor White}
         foreach ($row in $dt)
         {
             if ($verbose) {Write-Host "Updating"$row -ForegroundColor White -NoNewline}
             
-            Update-Instance -InstanceId $row -datetime $datetime
-            Update-DB -InstanceId $row -datetime $datetime
-            Update-DBFile -InstanceId $row -datetime $datetime
-            #Update-DBTable -InstanceId $row -datetime $datetime
-            Update-DBRestore -InstanceId $row -datetime $datetime
-            Update-DBBackup -InstanceId $row -datetime $datetime
-            
+            Get-SQLDisk -DeviceId $row.DeviceId -datetime $datetime            
             if ($verbose) {Write-Host " Completed" -ForegroundColor Cyan}
         }
     }
@@ -2046,26 +2121,72 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
             [switch]$verbose=$false
         )
         #$datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
+        $q="SELECT InstanceId,CASE WHEN SUBSTRING(ProductVersion,1,2)='11' THEN '2012' ELSE '' END AS ProductVersion,Edition,ServerState FROM dbm.Instance"
+        $cs=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
+        $dt=Get-DataTable -connectionstring $cs -sqlquery $q
+        if ($verbose) {Write-Host "Timestamp"$datetime -ForegroundColor White}
+        foreach ($row in $dt)
+        {
+            if ($verbose) {Write-Host "Updating"$row.InstanceId -ForegroundColor White -NoNewline}
+            
+            #Update-Instance -InstanceId $row -datetime $datetime
+            #Write-Host ".DB." -ForegroundColor DarkCyan -NoNewline
+            #Update-DB -InstanceId $row.InstanceId -datetime $datetime
+            #Write-Host ".DBFile." -ForegroundColor DarkCyan -NoNewline
+            #Update-DBFile -InstanceId $row.InstanceId -datetime $datetime
+            #Write-Host ".DBTable." -ForegroundColor DarkCyan -NoNewline
+            #Update-DBTable -InstanceId $row.InstanceId -datetime $datetime
+            #Write-Host ".SQLJobJistory." -ForegroundColor DarkCyan -NoNewline
+            #Update-SQLJobHistory -datetime $datetime -InstanceId $row.InstanceId
+            Update-DBRestore -InstanceId $row.InstanceId -datetime $datetime
+            Update-DBBackup -InstanceId $row.InstanceId -datetime $datetime -version $row.ProductVersion
+            
+            if ($verbose) {Write-Host " Completed" -ForegroundColor Cyan}
+        }
+    }
+    function Invoke-DBMMonthly
+    {
+        param(
+            $datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+            [switch]$verbose=$false
+        )
         $dt=Get-InstancesList
         if ($verbose) {Write-Host "Timestamp"$datetime -ForegroundColor White}
         foreach ($row in $dt)
         {
             if ($verbose) {Write-Host "Updating"$row -ForegroundColor White -NoNewline}
-            
-            #Update-Instance -InstanceId $row -datetime $datetime
-            #Update-DB -InstanceId $row -datetime $datetime
-            #Update-DBFile -InstanceId $row -datetime $datetime
-            Update-DBTable -InstanceId $row -datetime $datetime
-            
-            #Update-DBRestore -InstanceId $row -datetime $datetime
-            #Update-DBBackup -InstanceId $row -datetime $datetime
+            Write-Host "/Get-Configuration" -ForegroundColor Green -NoNewline
+            Get-Configuration -datetime $datetime -InstanceId $row
+            Write-Host "/Get-MissingIndex" -ForegroundColor Green -NoNewline
+            Get-MissingIndex -datetime $datetime -InstanceId $row
+            Write-Host "/Get-DuplicatedIndex" -ForegroundColor Green -NoNewline
+            Get-DuplicatedIndex -datetime $datetime -InstanceId $row
+            Write-Host "/Get-IndexFragmentation" -ForegroundColor Green -NoNewline
+            Get-IndexFragmentation -datetime $datetime -InstanceId $row
+            Write-Host "/Get-UnusedIndex" -ForegroundColor Green -NoNewline
+            Get-UnusedIndex -datetime $datetime -InstanceId $row
+            Write-Host "/Update-SQLJob" -ForegroundColor Green -NoNewline
+            Update-SQLJob -datetime $datetime -InstanceId $row
             
             if ($verbose) {Write-Host " Completed" -ForegroundColor Cyan}
         }
+            
+
+    }
+    Function Test
+    {
+        $datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
+        #Invoke-DBMDaily -datetime $datetime
+        $cs=Get-ConnectionString -server L1-DBADEVDB-01 -database dbmdb
+        $query="CREATE TABLE test.Tabla (campo NVARCHAR(100))"
+        Invoke-Transaction -connectionstring $cs -sqlquery $query
     }
 
+
+#$datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
+#Invoke-DBMDaily -datetime $datetime -verbose
+
 $datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
-Update-SQLJob -datetime $datetime -InstanceId SK-SQLGENDB-01
-Update-SQLJobHistory -datetime $datetime -InstanceId SK-SQLGENDB-01
-#Update-DBRestore -datetime $datetime -InstanceId SK-CRMSDB-02
-#Update-DBBackup -datetime $datetime -InstanceId SK-CRMSDB-02
+Invoke-DBMMonthly -datetime $datetime -verbose
+Invoke-DBMWeekly -datetime $datetime -verbose
+Invoke-DBMDaily -datetime $datetime -verbose

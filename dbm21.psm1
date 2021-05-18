@@ -1,4 +1,4 @@
-# DBM PowerShell Admin Tools
+﻿# DBM PowerShell Admin Tools
 # This tool is intended to provide a Gathering Information System.
 # Requirements
 #   SQL Server Module - Demoted
@@ -7,9 +7,11 @@
 # V 2.0.0 15/06/2020 Guillermo Castro
 # V 2.1.0 15/02/2021 Guillermo Castro
 # V 2.1.1 27/04/2021 Guillermo Castro
+# V 2.1.2 28/04/2021 Guillermo Castro
+# V 2.1.3 18/05/2021 Guillermo Castro
 
-$env:DBMSVR="L1-DBADEVDB-01"
-$env:DBMDB="DBMDB"
+$env:DBMSVR="SK-SQLGENDB-01"
+$env:DBMDB="DailyReports"
 $env:localDB="Admin"
 $env:DBMVersion="2.1.0.0"
 $env:DBMRetention="60"
@@ -1113,7 +1115,7 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
         }
     process
         {
-            $clientconnectionstring=Get-ConnectionString -server $Instance -database master
+            $clientconnectionstring=Get-ConnectionString -server $InstanceId -database master
             $connectionstring=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
             $query="TRUNCATE TABLE [dbm].[tmpDB]"
             Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
@@ -1127,11 +1129,14 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
                     ,[compatibility_level] AS [DBCompatibility]
                     ,[create_date] AS [DBCreation]
                               FROM sys.databases WHERE [name]<>'tempdb'"
+            #Write-Host $q -ForegroundColor White
             $dt=Get-DataTable -connectionstring $clientconnectionstring -sqlquery $q
+            #$dt | Out-GridView
             foreach ($r in $dt)
                 {
                     $d=$r.DBCreation
                     $query="INSERT INTO [dbm].[tmpDB] ([InstanceId],[DBName],[IsUserDB],[DBState],[DBUserAccess],[DBRecovery],[DBCollation],[DBCompatibility],[DBCreation]) VALUES ('"+$InstanceId+"','"+$r.DBName+"','"+$r.IsUserDB+"','"+$r.DBState+"','"+$r.DBUserAccess+"','"+$r.DBRecovery+"','"+$r.DBCollation+"',"+$r.DBCompatibility+",CONVERT(DATETIME,CONVERT(NVARCHAR(64),'"+$d.toString("yyyy-MM-dd hh:mm:ss")+"')))"
+                    Write-Host $query -ForegroundColor White
                     Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
                 }
             #Merging temp table with live table
@@ -1148,6 +1153,7 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
                                 INSERT ([InstanceId],[DBName],[IsUserDB],[DBState],[DBUserAccess],[DBRecovery],[DBCollation],[DBCompatibility],[DBCreation])
                                 VALUES (S.[InstanceId],S.[DBName],S.[IsUserDB],S.[DBState],S.[DBUserAccess],S.[DBRecovery],S.[DBCollation],S.[DBCompatibility],S.[DBCreation])
                 ;"
+                Write-Host $query -ForegroundColor White
                 Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
         }
     }
@@ -1660,7 +1666,7 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
                         $dt3=Get-DataTable -connectionstring $connectionstring3 -sqlquery $query
                         foreach ($r3 in $dt3)
                         {
-                            $query="INSERT INTO [dbm].[DBTable] ([InstanceId],[DBName],[name],[rows],[reserved],[data],[index_size],[unused],[DataImportUTC]) VALUES ('"+$InstanceId+"','"+$r1.name+"','"+$table+"',RTRIM('"+$r3.rows+"'),'"+$r3.reserved+"','"+$r3.data+"','"+$r3.index_size+"','"+$r3.unused+"','"+$datetime+"')"
+                            $query="INSERT INTO [dbm].[DBTable] ([InstanceId],[DBName],[DBTable],[rows],[reserved],[data],[index_size],[unused],[DataImportUTC]) VALUES ('"+$InstanceId+"','"+$r1.name+"','"+$table+"',RTRIM('"+$r3.rows+"'),'"+$r3.reserved+"','"+$r3.data+"','"+$r3.index_size+"','"+$r3.unused+"','"+$datetime+"')"
                             $connectionstring=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
                             
                             $r=Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
@@ -2083,7 +2089,18 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
         $datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss"),
             [switch]$verbose=$false
         )
-        $q="SELECT InstanceId,CASE WHEN SUBSTRING(ProductVersion,1,2)='11' THEN '2012' ELSE '' END AS ProductVersion,Edition,ServerState FROM dbm.Instance"
+        $q="SELECT 
+	            InstanceId
+	            ,CASE 
+		            WHEN SUBSTRING(ProductVersion,1,2)='11' THEN '2012' 
+		            WHEN SUBSTRING(ProductVersion,1,2)='12' THEN '2014' 
+		            WHEN SUBSTRING(ProductVersion,1,2)='13' THEN '2016' 
+		            WHEN SUBSTRING(ProductVersion,1,2)='14' THEN '2017' 
+		            WHEN SUBSTRING(ProductVersion,1,2)='15' THEN '2019' 
+		            ELSE '' END AS ProductVersion
+	            ,Edition
+	            ,ServerState 
+            FROM dbm.Instance"
         $cs=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
         $dt=Get-DataTable -connectionstring $cs -sqlquery $q
         if ($verbose) {Write-Host "Timestamp"$datetime -ForegroundColor White}
@@ -2097,6 +2114,7 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
                 {
                     Update-DBRestore -InstanceId $row.InstanceId -datetime $datetime
                     $version=$row.ProductVersion
+                    Write-host " "$version -ForegroundColor Green -NoNewline
                     Update-DBBackup -InstanceId $row.InstanceId -datetime $datetime -version $version
                 }
             }
@@ -2173,11 +2191,24 @@ Write-Host "Current DBM database :" $env:DBMDB -ForegroundColor DarkCyan
             
 
     }
-    Function Test
+    function Invoke-DBMCleanUp
     {
-        $datetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
-        #Invoke-DBMDaily -datetime $datetime
-        $cs=Get-ConnectionString -server L1-DBADEVDB-01 -database dbmdb
-        $query="CREATE TABLE test.Tabla (campo NVARCHAR(100))"
-        Invoke-Transaction -connectionstring $cs -sqlquery $query
+        $connectionstring=Get-ConnectionString -server $env:DBMSVR -database $env:DBMDB
+        $query="
+        DECLARE @RetentionDays INT="+$env:DBMRetention+"
+        DELETE [dbm].[Configuration] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[DBBackup] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[DBJobHistory] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[DBRestore] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[DBTable] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[Disk] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[DuplicatedIndex] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[IndexFragmentation] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[MissingIndex] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[PerfMon] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[Script] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[TableUsage] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        DELETE [dbm].[UnusedIndex] WHERE DataImportUTC>GETDATE()-@RetentionDays
+        "
+        Invoke-Transaction -connectionstring $connectionstring -sqlquery $query
     }
